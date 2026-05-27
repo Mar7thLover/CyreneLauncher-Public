@@ -1,6 +1,9 @@
-# Validates that every published release ships the asset filenames Cyrene
-# Launcher expects. Runs after publish so it cannot prevent a bad release, but
-# the failed check turns into a red X next to the tag — easy to spot.
+# Validates that a published release ships at least one of:
+#   - cyrene-launcher.exe       (launcher self-update channel)
+#   - Astrolabe_OS.dll + Astrolabe_CN.dll  (patch DLL channel, both required)
+#
+# Releases can mix all three — the launcher and the patch reader each pick
+# the newest release containing their asset independently.
 name: Validate Release Assets
 
 on:
@@ -14,15 +17,14 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check required assets
+      - name: Check assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          required=("Astrolabe_OS.dll" "Astrolabe_CN.dll")
+          known=("cyrene-launcher.exe" "Astrolabe_OS.dll" "Astrolabe_CN.dll")
 
-          # gh release view returns assets[].name; collect into a sorted list.
           got=$(gh release view "$TAG" \
             --repo "${{ github.repository }}" \
             --json assets --jq '.assets[].name' \
@@ -31,23 +33,34 @@ jobs:
           echo "Found assets:"
           echo "$got" | sed 's/^/  - /'
 
-          missing=()
-          for name in "${required[@]}"; do
-            if ! grep -qx -- "$name" <<<"$got"; then
-              missing+=("$name")
-            fi
-          done
+          has_launcher=0
+          has_os=0
+          has_cn=0
+          grep -qx 'cyrene-launcher.exe' <<<"$got" && has_launcher=1 || true
+          grep -qx 'Astrolabe_OS.dll'    <<<"$got" && has_os=1       || true
+          grep -qx 'Astrolabe_CN.dll'    <<<"$got" && has_cn=1       || true
 
-          extras=$(comm -23 <(echo "$got") <(printf '%s\n' "${required[@]}" | sort -u) || true)
+          launcher_release=$has_launcher
+          patch_release=$(( has_os == 1 && has_cn == 1 ? 1 : 0 ))
+          partial_patch=$(( (has_os + has_cn) == 1 ? 1 : 0 ))
 
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing required assets: ${missing[*]}"
+          if [ $partial_patch -eq 1 ]; then
+            echo "::error::Patch DLLs must ship as a pair (Astrolabe_OS.dll + Astrolabe_CN.dll)."
             exit 1
           fi
 
+          if [ $launcher_release -eq 0 ] && [ $patch_release -eq 0 ]; then
+            echo "::error::Release must contain either cyrene-launcher.exe or both Astrolabe_{OS,CN}.dll."
+            exit 1
+          fi
+
+          extras=$(comm -23 \
+            <(echo "$got") \
+            <(printf '%s\n' "${known[@]}" | sort -u) || true)
           if [ -n "$extras" ]; then
             echo "::warning::Unexpected assets present (launcher will ignore them):"
             echo "$extras" | sed 's/^/  - /'
           fi
 
-          echo "All required assets present."
+          [ $launcher_release -eq 1 ] && echo "Launcher release detected."
+          [ $patch_release    -eq 1 ] && echo "Patch release detected."
