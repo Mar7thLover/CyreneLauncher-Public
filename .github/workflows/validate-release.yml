@@ -1,0 +1,53 @@
+# Validates that every published release ships the asset filenames Cyrene
+# Launcher expects. Runs after publish so it cannot prevent a bad release, but
+# the failed check turns into a red X next to the tag — easy to spot.
+name: Validate Release Assets
+
+on:
+  release:
+    types: [published, edited, released]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          required=("Astrolabe_OS.dll" "Astrolabe_CN.dll")
+
+          # gh release view returns assets[].name; collect into a sorted list.
+          got=$(gh release view "$TAG" \
+            --repo "${{ github.repository }}" \
+            --json assets --jq '.assets[].name' \
+            | sort -u)
+
+          echo "Found assets:"
+          echo "$got" | sed 's/^/  - /'
+
+          missing=()
+          for name in "${required[@]}"; do
+            if ! grep -qx -- "$name" <<<"$got"; then
+              missing+=("$name")
+            fi
+          done
+
+          extras=$(comm -23 <(echo "$got") <(printf '%s\n' "${required[@]}" | sort -u) || true)
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required assets: ${missing[*]}"
+            exit 1
+          fi
+
+          if [ -n "$extras" ]; then
+            echo "::warning::Unexpected assets present (launcher will ignore them):"
+            echo "$extras" | sed 's/^/  - /'
+          fi
+
+          echo "All required assets present."

@@ -1,0 +1,17 @@
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local artifacts (releases happen via GitHub UI, never via committed binaries)
+*.dll
+*.exe
+*.pdb
+dist/
+build/
